@@ -22,6 +22,7 @@ $users = User::query
           ->paginate();
 ```
 If we want to change column value, we can use query time casting. So if we want to add query casting in this query after addSelect, we can add: `->withCasts(['last_login_at' => 'datetime'])`
+
 3. **Dynamic relationships using sub-queries:** If we need to multiple column value of above query, instead of adding `addSelect` one by one, we can use dynamic relationships. So that first we add `belongsTo` relation in `User` model.
 ```
 public function lastLogin()
