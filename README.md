@@ -48,7 +48,7 @@ $users = User::query
           ->orderBy('name')
           ->paginate();
 ```
-4. **Counting totals using conditional aggregates:** If we want to show aggreagation by different type of condition, we can use `case` in sql:
+4. **Calculating totals using conditional aggregates:** If we want to show aggreagation by different type of condition, we can use `case` in sql:
 ```
 SELECT 
     count(case when status = 'Requested' then 1 end) AS requested,
@@ -69,4 +69,83 @@ Feature::toBase()
     ->selectRaw("count(*) filter (when status = 'Planned') AS planned")
     ->first();
 ```
-5. 
+5. **Optimizing Circular Relationships:** If eager load operates same queries in multiple time we can use in-memory relationships. When you eager load a relationship, using the $album->songs property shorthand doesn't perform a new query; instead it fetches the Songs from a memoized property on the Album.
+
+We can pretend to eager load a relationship manually using the setRelation method:
+```
+  public function test_can_calculate_total_duration()
+  {
+      $album = factory('Album')->create();
+
+      $songs = new Collection([
+          factory('Song')->make(['duration' => 291]),
+          factory('Song')->make(['duration' => 123]),
+          factory('Song')->make(['duration' => 100]),
+      ]);
+
+     $album->songs()->saveMany($songs);
+     $album->setRelation('songs', $songs);
+
+      $this->assertEquals(514, $album->duration);
+  }
+```
+Now we can get rid of the DatabaseMigrations trait and use make to build our Album instead of create, leaving us with a test that looks like this:
+```
+class AlbumTest extends TestCase
+{
+    public function test_can_calculate_total_duration()
+    {
+        $album = factory('Album')->make();
+
+        $songs = new Collection([
+            factory('Song')->make(['duration' => 291]),
+            factory('Song')->make(['duration' => 123]),
+            factory('Song')->make(['duration' => 100]),
+        ]);
+
+        $album->setRelation('songs', $songs);
+
+        $this->assertEquals(514, $album->duration);
+    }
+}
+```
+Running this test still passes, but this time it only takes about 3ms to finish! That's thirty times faster.
+6. **Multi column searching:** Suppose one user belongs to one compnay but one company has multiple users. So we want to search user's first name, last name, company name in such a way that every search terms must be recorded by any columns. So:
+```
+$results = User::query()
+                 ->search(request('search'))
+                 ->with('company')
+                 ->paginate()
+```
+Now we create seacrh scope in User model.
+```
+public function scopeSearch($query, string $terms=null){
+    collect(' ', $terms)->filter()->each(function ($terms) use ($query){
+        $term = '%'. $term. '%';
+        $query->where(function ($query) use ($term){   //we use callback because we need every search term in isolation
+            $query->where('first_name', 'like', $term)
+                  ->orWhere('last_name', 'like', $term)
+                  ->orWhereHas('company', function($query) use ($term){
+                      $query->where('name', 'like', $term);
+                  })
+        });
+    });
+}
+```
+7. **Run Additional queries:** The previous query takes huge execution time. Also after adding index, it doesn't executes indexes. We can experiment it by placing before `EXPLAIN` command of raw query of mysql. So first we need to remove wildcard(`%`) from `$term = '%'. $term. '%';` this line. Also need to execute additional query instead of  `orWhereHas`:
+```
+public function scopeSearch($query, string $terms=null){
+    collect(str_getcsv($terms, ' ', '"'))->filter()->each(function ($terms) use ($query){  //The str_getcsv() function parses a string for fields in CSV format and returns an array containing the fields read.
+        $term = $term. '%';
+        $query->where(function ($query) use ($term){   //we use callback because we need every search term in isolation
+            $query->where('first_name', 'like', $term)
+                  ->orWhere('last_name', 'like', $term)
+                  ->orWhereIn('company_id', Company::query()
+                      ->where('name', 'like', $term)
+                      ->pluck('id')
+                  );
+        });
+    });
+}
+```
+8. 
