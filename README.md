@@ -147,6 +147,62 @@ public function scopeSearch($query, string $terms=null){
                   );
         });
     });
-}
+});
 ```
-8. 
+8. **Using unions to run query independetly:** About union: when you run union between multiple queries, each query in that union must return exact number of columns. If we want to run a single query instead of multiple query of previous query, then in raw sql:
+```
+select *
+from users
+where id in (
+    select id from (
+        select id
+        from users
+        where first_name like 'bill%' or last_name like 'bill%'
+        
+        union
+        
+        select users.id
+        from users
+        inner join companies on companies.id = users_company_id
+        where companies.name like 'bill%'
+    ) as matches
+) and id in (
+    select id from (
+        select id
+        from users
+        where first_name like 'microsoft%' or last_name like 'microsoft%'
+        
+        union
+        
+        select users.id
+        from users
+        inner join companies on companies.id = users_company_id
+        where companies.name like 'microsoft%'
+    ) as matches
+) 
+```
+Now time to implement it via eloquent:
+```
+public function scopeSearch($query, string $terms=null){
+    collect(str_getcsv($terms, ' ', '"'))->filter()->each(function ($terms) use ($query){  //The str_getcsv() function parses a string for fields in CSV format and returns an array containing the fields read.
+        $term = $term. '%';
+        $query->whereIn('id', function ($query) use ($term){  
+            $query->select('id')
+                ->from(function ($query) use ($term){
+                          $query->select('id')
+                          ->from('users')
+                          ->where('first_name', 'like', $term)
+                          ->orWhere('last_name', 'like', $term)
+                          ->union(
+                              $query->newQuery()
+                                  ->select('users.id')
+                                  ->from('users')
+                                  ->join('companies', 'companies.id', '=', 'users.company_id')
+                                  ->where('companies.name', 'like', $term)
+                          );
+                }, 'matches');
+        });
+    });
+});
+```
+9. 
