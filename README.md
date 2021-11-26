@@ -205,4 +205,200 @@ public function scopeSearch($query, string $terms=null){
     });
 });
 ```
-9. 
+9. **Searching using regular expressions:** If our string has quotation/others then searching query and indexing will not work. For this we add a virtual column in database/migration file of searched columns. Like in previous query, we need to add name virtual column in company table and vice versa. So in migartion file:
+```
+$table->string('name_normalized')->virtualAs("regexp_replace(name, '[^A-Za-z0-9]', '')")->index();
+```
+We will update users migartion file also. So the final look of previous query will be:
+```
+collect(str_getcsv($terms, ' ', '"'))->filter()->each(function ($terms) use ($query){  //The str_getcsv() function parses a string for fields in CSV format and returns an array containing the fields read.
+        $term = preg_replace('/[^A-Za-z0-9]/', '', $term). '%';
+        $query->whereIn('id', function ($query) use ($term){  
+            $query->select('id')
+                ->from(function ($query) use ($term){
+                          $query->select('id')
+                          ->from('users')
+                          ->where('first_name_normalized', 'like', $term)    //in here first_name_normalized is the virtual column
+                          ->orWhere('last_name_normalized', 'like', $term)
+                          ->union(
+                              $query->newQuery()
+                                  ->select('users.id')
+                                  ->from('users')
+                                  ->join('companies', 'companies.id', '=', 'users.company_id')
+                                  ->where('companies.name_normalized', 'like', $term)
+                          );
+                }, 'matches');
+        });
+    });
+```
+10. **Compound indexes:** if we use multiple order_by columns in query, for better performance we use them together by composite indexes. For composite indexes, we need to add ```$table->index(['last_name', 'first_name']);``` in migartion file. Note: we need to sorting accordingly by query or there will be a performance issue.
+11. **Ordering by has-one relationship:** When use order-by using has-one relationships, you can use joining. This is more faster than subquery. Using join:
+```
+$users = User::query()
+         ->select('users.*')  //by default laravel will fetch all columns both users table and companies table
+         ->join('companies', 'companies.user_id', '=', 'users.id')
+         ->orderBy('companies.name')
+         ->with('company')
+         ->paginate();
+```
+12. **Ordering by has-many relationships:** By ordering of has-many relationships, using sub-query is more faster than joining. 
+```
+$users = User::query()
+          ->orderByDesc(Login::select('created_at')
+              ->whereColumn('user_id', 'users.id')
+              ->latest()
+              ->take(1)
+          )
+          ->withLastLogin()
+          ->paginate()
+```
+13. **Ordering with nulls always last:** If we want to set null value in last during sort, we can use the query in `orderByRaw` method. Like: in a table where we want to sort by clicking a specific column, so:
+```
+$users = User::query()
+          ->when(request('sort') === 'town', function($query){
+              $query->orderByRaw('town is null')
+              ->orderBy('town', request('direction'));
+          })
+          ->orderBy('name')
+          ->paginate();
+```
+We can write this command easily in postgres by using `nulls last` command. So we add this in existing query by using macro. So in `AppServiceProvider`:
+```
+Builder::macro('orderByNullsLast', function($column, $direction = 'asc'){
+    $column = $this->getGrammar()->wrap($column);
+    $direction = strtolower($direction) === 'asc' ? 'asc' : 'desc';
+    return $this->orderByRaw("$column $direction nulls last");
+});
+```
+Now in original query:
+```
+$users = User::query()
+          ->when(request('sort') === 'town', function($query){
+              $query->orderByNullsLast('town', request('direction'));
+          })
+          ->orderBy('name')
+          ->paginate();
+```
+14. **Ordering by custom algorithm:** Suppose we have feature table. now we want to sort by column in different manner. So in Feature query:
+```
+$query = Feature::query()
+          ->withCount('comments', 'votes')
+          ->when(request('sort'), function($query, $sort){
+              switch($sort){
+                  case 'title': return $query->orderBy('title', request('direction'));
+                  case 'status': return $query->orderByStatus(request('direction'));
+                  case 'activity': return $query->orderByActivity(request('direction'));
+              }
+          })
+          ->latest()
+          ->paginate();
+```
+Now first we create `orderByStatus` `scope` in `Feature` model:
+```
+public dunction scopeOrderByStatus($query, $direction)
+{
+    $query->orderBy(DB::raw('
+        case 
+            when status = "Requested" then 1   //we assume this number and sort by this number
+            when status = "Approved" then 2
+            when status = "Completed" then 3
+        end
+    '), $direction);
+}
+```
+Now we want to add index of this custom algorithm in features migration:
+```
+$table->rawIndex('(
+    case 
+          when status = "Requested" then 1 
+          when status = "Approved" then 2
+          when status = "Completed" then 3
+    end
+)', 'features_status_ranking_index');
+```
+Now we add scope for `orderByActivity` in features model. As we already used `withCount` , we can easily use `comments_count` and `votes_count`. Because eloquent run subqueries and assign then in new column name `comments_count` and `votes_count`.
+```
+public function scopeOrderByActivity($query, $direction)
+{
+    $query->orderBy(
+        DB::raw('-(votes_count + (comments_count * 2))'), //because we nee to show lowest value first
+        $direction
+    );
+}
+```
+We cant use index because this actually depends on subquery
+15. **Filtering and sorting date month:** 
+```
+$query->orderByRaw('date_format(birth_date, "%m-%d")');
+```
+Now for faster process we need to add composite index in migration file:
+```
+$table->rawIndex("(date_format(birth_date, '%m-%d')), name", 'users_birthday_name_index');
+```
+Now if we want to show only birthday of current week:
+```
+$dates = Carbon::now()->startOfWeek()
+          ->daysUntil(Carbon::now()->endOfWeek())
+          ->map(fn ($date) => $date->format('m-d'));
+$query->whereRaw('date_format(birth_date, '%m-%d') in (?,?,?,?,?,?,?)', iterator_to_array($dates));
+```
+16. **Full Text Search:** First we neet to create full text search index in Posts migration file. Since laravel doesn't support that, we need to add statement in manually.
+```
+DB::statement('
+    create fulltext index posts_fulltext_index
+    on posts(title, body)
+    with parser ngram
+');
+```
+Now in query:
+```
+$posts = Post::query()
+          ->with('author')
+          ->when(request('search'), function($query, $search){
+              $query->selectRaw('*, match(title, body) against(? in boolean mode) as score', [$search])
+              ->whereRaw('match(title, body) against(? in boolean mode)', [$search]);
+          })
+```
+For more details: [Mysql Notes](/sql.md)
+
+17. **Distance between geographic points:** Suppose we add a scope with main query and in scope we need to check the all columns have been selected
+```
+public function scopeSelectDistanceTo($query, array $coordinates)
+{
+    if(is_null($query->getQuery()->columns)){
+        $query->select('*');
+    }
+    $query->selectRaw('ST_Distance(
+        ST_SRID(Point(longitude, latitude), 4326),   //4326 is the special reference identifier and it means world
+        ST_SRID(Point(?,?), 4326)
+    ) as distance', $coordinates);
+}
+```
+By default the result will be in meters.
+18. **Filtering by geographic distance:** If we want to add distance, then with previous query:
+```
+ $query->selectRaw('ST_Distance(
+        ST_SRID(Point(longitude, latitude), 4326),  
+        ST_SRID(Point(?,?), 4326)
+    ) as distance <= ?', [...$coordinates, $distance]);
+```
+Now if we want to make more faster then instead of two columns name langitude and longitude in migration file, we can add just one column:
+```
+$table->point('location', 4326);
+```
+So in query:
+```
+ $query->selectRaw('ST_Distance(
+        location, 
+        ST_SRID(Point(?,?), 4326)
+    ) as distance <= ?', [...$coordinates, $distance]);
+```
+19. **Ordering by distance** This will almost same of previous query:
+```
+$direction = strtolower($direction) === 'asc' ? 'asc' : 'desc';
+ $query->orderByRaw('ST_Distance(
+        location, 
+        ST_SRID(Point(?,?), 4326)
+    ) '.$directon, $coordinates);
+```
+20. 
