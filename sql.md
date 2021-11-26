@@ -31,4 +31,20 @@ ngram Parser Space Handling
 The ngram parser eliminates spaces when parsing. For example:
 “ab cd” is parsed to “ab”, “cd”
 “a bc” is parsed to “bc”
-3. 
+
+3. **POINTS** :
+A Point consists of X and Y coordinates, which may be obtained using the ST_X() and ST_Y() functions, respectively. These functions also permit an optional second argument that specifies an X or Y coordinate value, in which case the function result is the Point object from the first argument with the appropriate coordinate modified to be equal to the second argument.
+For Point objects that have a geographic spatial reference system (SRS), the longitude and latitude may be obtained using the ST_Longitude() and ST_Latitude() functions, respectively. These functions also permit an optional second argument that specifies a longitude or latitude value, in which case the function result is the Point object from the first argument with the longitude or latitude modified to be equal to the second argument.
+
+Unless otherwise specified, functions in this section handle their geometry arguments as follows:
+If any argument is NULL, the return value is NULL.
+If any geometry argument is a valid geometry but not a Point object, an ER_UNEXPECTED_GEOMETRY_TYPE error occurs.
+If any geometry argument is not a syntactically well-formed geometry, an ER_GIS_INVALID_DATA error occurs.
+If any geometry argument is a syntactically well-formed geometry in an undefined spatial reference system (SRS), an ER_SRS_NOT_FOUND error occurs.
+If an X or Y coordinate argument is provided and the value is -inf, +inf, or NaN, an ER_DATA_OUT_OF_RANGE error occurs.
+If a longitude or latitude value is out of range, an error occurs:
+If a longitude value is not in the range (−180, 180], an ER_LONGITUDE_OUT_OF_RANGE error occurs.
+If a latitude value is not in the range [−90, 90], an ER_LATITUDE_OUT_OF_RANGE error occurs.
+Ranges shown are in degrees. The exact range limits deviate slightly due to floating-point arithmetic.
+Otherwise, the return value is non-NULL.
+4. 
